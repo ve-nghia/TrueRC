@@ -1,5 +1,5 @@
-# Use Python 3.10 (better library compatibility than 3.11)
-FROM python:3.10-slim
+# Use official Python runtime as base image
+FROM python:3.11-slim
 
 # Set working directory
 WORKDIR /app
