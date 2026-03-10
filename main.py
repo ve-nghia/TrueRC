@@ -16,6 +16,7 @@ from typing import Dict, List, Any, Optional
 import requests
 from google.cloud import bigquery
 from google.cloud import secretmanager
+from google.cloud import firestore
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -54,6 +55,64 @@ def get_woo_headers() -> Dict[str, str]:
         "Authorization": f"Basic {credentials}",
         "Content-Type": "application/json",
     }
+
+
+def load_woocommerce_sync_state() -> Dict[str, Any]:
+    """Load resumable cursor from sync_state_woocommerce table."""
+    try:
+        client = bigquery.Client(project=PROJECT_ID)
+        query = f"""
+        SELECT last_order_id, batch_number, records_loaded_total
+        FROM `{PROJECT_ID}.{DATASET_ID}.sync_state_woocommerce`
+        WHERE id = 'current'
+        LIMIT 1
+        """
+        result = client.query(query).result()
+        rows = list(result)
+        if rows:
+            row = rows[0]
+            return {
+                "last_order_id": row.last_order_id,
+                "batch_number": row.batch_number,
+                "records_loaded_total": row.records_loaded_total,
+            }
+    except Exception as e:
+        logger.warning(f"Could not load woocommerce sync_state: {e}")
+    
+    return {
+        "last_order_id": None,
+        "batch_number": 0,
+        "records_loaded_total": 0,
+    }
+
+
+def update_woocommerce_sync_state(last_order_id: int, batch_number: int, records_loaded_total: int) -> None:
+    """Update sync state after successful batch."""
+    try:
+        client = bigquery.Client(project=PROJECT_ID)
+        query = f"""
+        MERGE INTO `{PROJECT_ID}.{DATASET_ID}.sync_state_woocommerce` T
+        USING (SELECT @id as id) S
+        ON T.id = S.id
+        WHEN MATCHED THEN
+          UPDATE SET last_order_id = @last_id, batch_number = @batch_num, records_loaded_total = @records_total, updated_at = CURRENT_TIMESTAMP()
+        WHEN NOT MATCHED THEN
+          INSERT (id, last_order_id, batch_number, records_loaded_total, updated_at)
+          VALUES (@id, @last_id, @batch_num, @records_total, CURRENT_TIMESTAMP())
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("id", "STRING", "current"),
+                bigquery.ScalarQueryParameter("last_id", "INT64", last_order_id),
+                bigquery.ScalarQueryParameter("batch_num", "INT64", batch_number),
+                bigquery.ScalarQueryParameter("records_total", "INT64", records_loaded_total),
+            ]
+        )
+        client.query(query, job_config=job_config).result()
+        logger.info(f"✓ Updated woocommerce sync_state: batch={batch_number}, last_order_id={last_order_id}, total={records_loaded_total}")
+    except Exception as e:
+        logger.error(f"Failed to update woocommerce sync_state: {e}")
+        raise
 
 
 def get_last_sync_time(table_name: str) -> Optional[str]:
@@ -374,54 +433,102 @@ def load_customers_to_bigquery(customers: List[Dict]) -> int:
 
 @app.route('/', methods=['POST'])
 def sync_woocommerce():
-    """Main Cloud Run endpoint: Sync WooCommerce data to BigQuery."""
-    logger.info("Starting WooCommerce → BigQuery sync...")
+    """Main Cloud Run endpoint: Sync WooCommerce data to BigQuery (batch processing)."""
+    logger.info("Starting WooCommerce → BigQuery sync (batch mode)...")
+
+    # Check if job is already running
+    db = firestore.Client()
+    lock_ref = db.collection('sync_locks').document('woocommerce-sync')
+    lock = lock_ref.get()
+
+    if lock.exists:
+        logger.info("Job already running, skipping this interval")
+        return jsonify({"status": "skipped", "message": "Job already running"}), 200
+
+    # Create lock
+    lock_ref.set({"started_at": datetime.utcnow().isoformat()})
+    logger.info("Lock acquired, starting sync...")
 
     try:
-        # Get last sync times for incremental pulls
-        last_orders_sync = get_last_sync_time("orders")
-        last_products_sync = get_last_sync_time("products")
-        last_customers_sync = get_last_sync_time("customers")
+        # Load sync state for batch processing
+        sync_state = load_woocommerce_sync_state()
+        current_batch_number = sync_state["batch_number"]
+        records_loaded_total = sync_state["records_loaded_total"]
+        logger.info(f"Resuming from batch {current_batch_number}, total loaded: {records_loaded_total}")
 
-        logger.info(f"Last syncs: orders={last_orders_sync}, products={last_products_sync}, customers={last_customers_sync}")
+        # Batch parameters
+        batch_size = 100
+        start_offset = current_batch_number * batch_size
 
-        # 1. Fetch orders (incremental)
-        logger.info("Fetching orders...")
-        orders = fetch_woo_data("/orders", after=last_orders_sync)
-        orders_loaded = load_orders_to_bigquery(orders)
+        # 1. Fetch ONE batch of orders
+        logger.info(f"Fetching batch {current_batch_number} (offset={start_offset}, size={batch_size})...")
+        all_orders = fetch_woo_data("/orders", per_page=batch_size)
+        
+        # Paginate manually to get exact batch
+        batch_orders = all_orders[start_offset:start_offset + batch_size] if all_orders else []
+
+        if not batch_orders:
+            logger.warning(f"No orders for batch {current_batch_number}, initial load complete")
+            result = {
+                "status": "success",
+                "timestamp": datetime.utcnow().isoformat(),
+                "batch": current_batch_number,
+                "records_loaded": 0,
+                "total_records": records_loaded_total,
+                "message": "Initial load complete, switching to incremental mode",
+            }
+            logger.info(f"✓ Sync complete: {json.dumps(result, indent=2)}")
+            return jsonify(result), 200
+
+        # 2. Process this batch
+        logger.info(f"Processing {len(batch_orders)} orders in batch {current_batch_number}...")
+        
+        orders_loaded = load_orders_to_bigquery(batch_orders)
         update_sync_metadata("orders", orders_loaded)
 
-        # 2. Fetch and load order items (from orders)
-        logger.info("Extracting order items...")
-        items_loaded = load_order_items_to_bigquery(orders)
+        # 3. Extract order items from this batch
+        logger.info(f"Extracting order items from batch...")
+        items_loaded = load_order_items_to_bigquery(batch_orders)
         update_sync_metadata("order_items", items_loaded)
 
-        # 3. Fetch products (incremental)
-        logger.info("Fetching products...")
-        products = fetch_woo_data("/products", after=last_products_sync)
-        products_loaded = load_products_to_bigquery(products)
-        update_sync_metadata("products", products_loaded)
+        # 4. Fetch products incrementally (not batched - small dataset)
+        if current_batch_number == 0:  # Only on first run
+            logger.info("Fetching all products...")
+            products = fetch_woo_data("/products")
+            products_loaded = load_products_to_bigquery(products)
+            update_sync_metadata("products", products_loaded)
+        else:
+            products_loaded = 0
 
-        # 4. Fetch customers (incremental)
-        logger.info("Fetching customers...")
-        customers = fetch_woo_data("/customers", after=last_customers_sync)
-        customers_loaded = load_customers_to_bigquery(customers)
-        update_sync_metadata("customers", customers_loaded)
+        # 5. Fetch customers incrementally (not batched - small dataset)
+        if current_batch_number == 0:  # Only on first run
+            logger.info("Fetching all customers...")
+            customers = fetch_woo_data("/customers")
+            customers_loaded = load_customers_to_bigquery(customers)
+            update_sync_metadata("customers", customers_loaded)
+        else:
+            customers_loaded = 0
+
+        # Update batch tracking
+        last_order_id = batch_orders[-1].get("id") if batch_orders else None
+        next_batch_number = current_batch_number + 1
+        new_total = records_loaded_total + orders_loaded
+        update_woocommerce_sync_state(last_order_id, next_batch_number, new_total)
 
         result = {
             "status": "success",
             "timestamp": datetime.utcnow().isoformat(),
-            "records_loaded": {
-                "orders": orders_loaded,
-                "order_items": items_loaded,
-                "products": products_loaded,
-                "customers": customers_loaded,
-            },
-            "total_records": orders_loaded + items_loaded + products_loaded + customers_loaded,
-            "message": "Successfully synced WooCommerce data to BigQuery",
+            "batch": current_batch_number,
+            "records_loaded_this_batch": orders_loaded,
+            "order_items_loaded": items_loaded,
+            "products_loaded": products_loaded,
+            "customers_loaded": customers_loaded,
+            "total_records_loaded": new_total,
+            "next_batch": next_batch_number,
+            "message": f"Batch {current_batch_number} complete ({orders_loaded} orders processed)",
         }
 
-        logger.info(f"✓ Sync complete: {json.dumps(result, indent=2)}")
+        logger.info(f"✓ Batch sync complete: {json.dumps(result, indent=2)}")
         return jsonify(result), 200
 
     except Exception as e:
@@ -431,6 +538,14 @@ def sync_woocommerce():
             "timestamp": datetime.utcnow().isoformat(),
             "error": str(e),
         }), 500
+
+    finally:
+        # Always delete lock when done
+        try:
+            db.collection('sync_locks').document('woocommerce-sync').delete()
+            logger.info("Lock released")
+        except:
+            pass
 
 
 @app.route('/health', methods=['GET'])
