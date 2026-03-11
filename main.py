@@ -65,9 +65,12 @@ def fetch_woo_data_batch(
     url = f"{WOO_API_BASE}{endpoint}"
     headers = get_woo_headers()
     params = {"per_page": per_page, "page": page}
-    if orderby: params["orderby"] = orderby
-    if order: params["order"] = order
-    if after: params["after"] = after
+    if orderby:
+        params["orderby"] = orderby
+    if order:
+        params["order"] = order
+    if after:
+        params["after"] = after
 
     for attempt in range(MAX_RETRIES):
         try:
@@ -99,8 +102,8 @@ def fetch_woo_data_batch(
     return []
 
 def fetch_woo_data_all(
-    endpoint: str, per_page: int = 1000, after: Optional[str] = None,
-    orderby: Optional[str] = None, order: Optional[str] = None,
+    endpoint: str, per_page: int = 500, after: Optional[str] = None,
+    orderby: Optional[str] = "date", order: Optional[str] = "asc",
 ) -> List[Dict]:
     """Fetch ALL pages of data from WooCommerce API."""
     all_records = []
@@ -129,16 +132,21 @@ def load_customers_to_bigquery(customers: List[Dict]) -> int:
             billing = customer.get("billing", {})
             shipping = customer.get("shipping", {})
             
+            # Contact info (fallback to billing/shipping if missing)
+            first_name = customer.get("first_name") or billing.get("first_name") or shipping.get("first_name") or None
+            last_name = customer.get("last_name") or billing.get("last_name") or shipping.get("last_name") or None
+            
             transformed.append({
                 "customer_id": customer.get("id"),
                 "email": customer.get("email"),
-                "first_name": customer.get("first_name"),
-                "last_name": customer.get("last_name"),
+                "first_name": first_name,
+                "last_name": last_name,
                 "username": customer.get("username"),
                 "role": customer.get("role"),
                 "is_paying_customer": customer.get("is_paying_customer"),
                 "date_created": customer.get("date_created"),
                 "date_modified": customer.get("date_modified"),
+                # Billing Address (flattened)
                 "billing_first_name": billing.get("first_name"),
                 "billing_last_name": billing.get("last_name"),
                 "billing_company": billing.get("company"),
@@ -150,6 +158,7 @@ def load_customers_to_bigquery(customers: List[Dict]) -> int:
                 "billing_country": billing.get("country"),
                 "billing_email": billing.get("email"),
                 "billing_phone": billing.get("phone"),
+                # Shipping Address (flattened)
                 "shipping_first_name": shipping.get("first_name"),
                 "shipping_last_name": shipping.get("last_name"),
                 "shipping_company": shipping.get("company"),
@@ -242,10 +251,12 @@ def init_products_customers():
                 "timestamp": datetime.utcnow().isoformat(),
             }), 200
 
+        products_loaded = 0
         customers_loaded = 0
+        
         if customer_count == 0:
             logger.info("Customers table empty. Fetching all customers...")
-            customers = fetch_woo_data_all("/customers")
+            customers = fetch_woo_data_all("/customers", orderby="id", order="asc")
             if customers:
                 customers_loaded = load_customers_to_bigquery(customers)
                 logger.info(f"✓ Loaded {customers_loaded} customers")
