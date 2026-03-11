@@ -551,63 +551,74 @@ def load_customers_to_bigquery(customers: List[Dict]) -> int:
 @app.route('/init', methods=['POST'])
 def init_products_customers():
     """
-    Initialize products and customers (one-time only).
+    Initialize products and customers (idempotent).
     
     On first call: Fetches all products and customers from WooCommerce, loads to BigQuery.
-    On subsequent calls: Returns "already_initialized" (does nothing).
+    On subsequent calls: Checks if both are populated; if both exist, returns "already_initialized".
     
-    Call this ONCE before starting the order backfill.
+    Call this to ensure products and customers are loaded.
     """
     logger.info("Checking if products/customers already initialized...")
     
     try:
         client = bigquery.Client(project=PROJECT_ID)
         
-        # Check if products table already has data
-        result = client.query(
+        # Check if both products AND customers already have data
+        product_result = client.query(
             f"SELECT COUNT(*) as cnt FROM `{PROJECT_ID}.{DATASET_ID}.products`"
         ).result()
-        product_count = next(result)[0]
+        product_count = next(product_result)[0]
         
-        if product_count > 0:
-            logger.info(f"Products/customers already initialized ({product_count} products exist). Skipping.")
+        customer_result = client.query(
+            f"SELECT COUNT(*) as cnt FROM `{PROJECT_ID}.{DATASET_ID}.customers`"
+        ).result()
+        customer_count = next(customer_result)[0]
+        
+        # Only skip if BOTH are populated
+        if product_count > 0 and customer_count > 0:
+            logger.info(f"Both products ({product_count}) and customers ({customer_count}) already initialized. Skipping.")
             return jsonify({
                 "status": "already_initialized",
-                "message": f"Products/customers already loaded ({product_count} products exist). Use POST / for order backfill.",
+                "message": f"Products/customers already loaded ({product_count} products, {customer_count} customers). Use POST / for order backfill.",
                 "timestamp": datetime.utcnow().isoformat(),
             }), 200
         
-        # First time only - load products and customers
-        logger.info("Initializing products and customers (first time)...")
-        
-        # Fetch all products
-        logger.info("Fetching all products...")
-        products = fetch_woo_data_all("/products", orderby="id", order="asc")
-        if products:
-            products_loaded = load_products_to_bigquery(products)
-            update_sync_metadata("products", products_loaded)
-            logger.info(f"✓ Loaded {products_loaded} products")
+        # Initialize products if missing
+        products_loaded = 0
+        if product_count == 0:
+            logger.info("Products table empty. Fetching all products...")
+            products = fetch_woo_data_all("/products", orderby="id", order="asc")
+            if products:
+                products_loaded = load_products_to_bigquery(products)
+                update_sync_metadata("products", products_loaded)
+                logger.info(f"✓ Loaded {products_loaded} products")
+            else:
+                logger.warning("No products fetched")
         else:
-            products_loaded = 0
-            logger.warning("No products fetched")
+            logger.info(f"Products already loaded ({product_count} exist). Skipping.")
         
-        # Fetch all customers
-        logger.info("Fetching all customers...")
-        customers = fetch_woo_data_all("/customers", orderby="id", order="asc")
-        if customers:
-            customers_loaded = load_customers_to_bigquery(customers)
-            update_sync_metadata("customers", customers_loaded)
-            logger.info(f"✓ Loaded {customers_loaded} customers")
+        # Initialize customers if missing
+        customers_loaded = 0
+        if customer_count == 0:
+            logger.info("Customers table empty. Fetching all customers...")
+            customers = fetch_woo_data_all("/customers", orderby="id", order="asc")
+            if customers:
+                customers_loaded = load_customers_to_bigquery(customers)
+                update_sync_metadata("customers", customers_loaded)
+                logger.info(f"✓ Loaded {customers_loaded} customers")
+            else:
+                logger.warning("No customers fetched")
         else:
-            customers_loaded = 0
-            logger.warning("No customers fetched")
+            logger.info(f"Customers already loaded ({customer_count} exist). Skipping.")
         
         result = {
             "status": "success",
             "timestamp": datetime.utcnow().isoformat(),
             "products_loaded": products_loaded,
             "customers_loaded": customers_loaded,
-            "message": "One-time init complete. Now use POST / for order backfill.",
+            "products_total": product_count + products_loaded,
+            "customers_total": customer_count + customers_loaded,
+            "message": "Init complete. Use POST / for order backfill.",
         }
         logger.info(f"✓ Init complete: {json.dumps(result, indent=2)}")
         return jsonify(result), 200
