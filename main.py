@@ -458,6 +458,45 @@ def sync_woocommerce():
         except Exception as e:
             logger.warning(f"Failed to release lock: {e}")
 
+@app.route('/sync-all', methods=['POST'])
+def sync_all():
+    logger.info("Starting daily sync (orders, customers, products modified/added in last 24h)...")
+    try:
+        lookback = (datetime.utcnow() - timedelta(days=1)).isoformat()
+        logger.info(f"Fetching updates since {lookback}...")
+        
+        # Fetch orders modified in last 24h
+        logger.info("Fetching orders...")
+        orders = fetch_woo_data_all("/orders", after=lookback, orderby="modified", order="asc")
+        orders_loaded = load_orders_to_bigquery(orders) if orders else 0
+        update_sync_metadata("orders", orders_loaded)
+        logger.info(f"✓ Loaded {orders_loaded} orders")
+        
+        # Extract order items
+        logger.info("Extracting order items...")
+        items_loaded = load_order_items_to_bigquery(orders) if orders else 0
+        update_sync_metadata("order_items", items_loaded)
+        logger.info(f"✓ Loaded {items_loaded} order items")
+        
+        # Fetch customers created in last 24h
+        logger.info("Fetching new customers...")
+        customers = fetch_woo_data_all("/customers", after=lookback, orderby="date_created", order="asc")
+        customers_loaded = load_customers_to_bigquery(customers) if customers else 0
+        update_sync_metadata("customers", customers_loaded)
+        logger.info(f"✓ Loaded {customers_loaded} customers")
+        
+        # Fetch products created in last 24h
+        logger.info("Fetching new products...")
+        products = fetch_woo_data_all("/products", after=lookback, orderby="date_created", order="asc")
+        products_loaded = load_products_to_bigquery(products) if products else 0
+        update_sync_metadata("products", products_loaded)
+        logger.info(f"✓ Loaded {products_loaded} products")
+        
+        return jsonify({"status": "success", "orders": orders_loaded, "order_items": items_loaded, "customers": customers_loaded, "products": products_loaded, "timestamp": datetime.utcnow().isoformat()}), 200
+    except Exception as e:
+        logger.error(f"✗ Daily sync failed: {e}", exc_info=True)
+        return jsonify({"status": "error", "error": str(e)}), 500
+
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({"status": "healthy"}), 200
