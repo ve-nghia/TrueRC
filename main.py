@@ -288,12 +288,76 @@ def load_orders_to_bigquery(orders: List[Dict]) -> int:
     transformed = []
     for order in orders:
         try:
+            # Extract shipping method from shipping_lines
+            shipping_lines = order.get("shipping_lines", [])
+            shipping_method = shipping_lines[0].get("method_title") if shipping_lines else None
+            
+            # Extract refund total from refunds
+            refunds = order.get("refunds", [])
+            refund_total = sum(float(r.get("total", 0)) for r in refunds) if refunds else 0.0
+            
+            # Extract billing address
+            billing = order.get("billing", {})
+            
+            # Extract shipping address
+            shipping = order.get("shipping", {})
+            
             transformed.append({
                 "order_id": order.get("id"),
-                "date_created": order.get("date_created"),
-                "total": float(order.get("total", 0)),
+                "order_number": order.get("number"),
                 "status": order.get("status"),
+                "currency": order.get("currency"),
+                # Dates
+                "date_created": order.get("date_created"),
+                "date_modified": order.get("date_modified"),
+                "date_paid": order.get("date_paid"),
+                "date_completed": order.get("date_completed"),
+                # Customer
                 "customer_id": order.get("customer_id"),
+                # Payment
+                "payment_method": order.get("payment_method"),
+                "payment_method_title": order.get("payment_method_title"),
+                "transaction_id": order.get("transaction_id"),
+                # Money
+                "subtotal": float(order.get("subtotal", 0)) if order.get("subtotal") else None,
+                "cart_tax": float(order.get("cart_tax", 0)) if order.get("cart_tax") else None,
+                "shipping_total": float(order.get("shipping_total", 0)) if order.get("shipping_total") else None,
+                "shipping_tax": float(order.get("shipping_tax", 0)) if order.get("shipping_tax") else None,
+                "discount_total": float(order.get("discount_total", 0)) if order.get("discount_total") else None,
+                "discount_tax": float(order.get("discount_tax", 0)) if order.get("discount_tax") else None,
+                "total_tax": float(order.get("total_tax", 0)) if order.get("total_tax") else None,
+                "total": float(order.get("total", 0)) if order.get("total") else None,
+                # Shipping Method
+                "shipping_method": shipping_method,
+                # Billing Address (flattened)
+                "billing_first_name": billing.get("first_name"),
+                "billing_last_name": billing.get("last_name"),
+                "billing_company": billing.get("company"),
+                "billing_address_1": billing.get("address_1"),
+                "billing_address_2": billing.get("address_2"),
+                "billing_city": billing.get("city"),
+                "billing_state": billing.get("state"),
+                "billing_postcode": billing.get("postcode"),
+                "billing_country": billing.get("country"),
+                "billing_email": billing.get("email"),
+                "billing_phone": billing.get("phone"),
+                # Shipping Address (flattened)
+                "shipping_first_name": shipping.get("first_name"),
+                "shipping_last_name": shipping.get("last_name"),
+                "shipping_company": shipping.get("company"),
+                "shipping_address_1": shipping.get("address_1"),
+                "shipping_address_2": shipping.get("address_2"),
+                "shipping_city": shipping.get("city"),
+                "shipping_state": shipping.get("state"),
+                "shipping_postcode": shipping.get("postcode"),
+                "shipping_country": shipping.get("country"),
+                "shipping_phone": shipping.get("phone"),
+                # Refunds
+                "refund_total": refund_total if refund_total > 0 else None,
+                # Notes
+                "customer_note": order.get("customer_note"),
+                "created_via": order.get("created_via"),
+                # Metadata
                 "updated_at": datetime.utcnow().isoformat(),
             })
         except Exception as e:
@@ -321,14 +385,49 @@ def load_orders_to_bigquery(orders: List[Dict]) -> int:
         ON T.order_id = S.order_id
         WHEN MATCHED THEN
           UPDATE SET 
-            date_created = S.date_created,
-            total = S.total,
             status = S.status,
-            customer_id = S.customer_id,
+            date_modified = S.date_modified,
+            date_paid = S.date_paid,
+            date_completed = S.date_completed,
+            payment_method = S.payment_method,
+            payment_method_title = S.payment_method_title,
+            transaction_id = S.transaction_id,
+            subtotal = S.subtotal,
+            cart_tax = S.cart_tax,
+            shipping_total = S.shipping_total,
+            shipping_tax = S.shipping_tax,
+            discount_total = S.discount_total,
+            discount_tax = S.discount_tax,
+            total_tax = S.total_tax,
+            total = S.total,
+            shipping_method = S.shipping_method,
+            billing_first_name = S.billing_first_name,
+            billing_last_name = S.billing_last_name,
+            billing_company = S.billing_company,
+            billing_address_1 = S.billing_address_1,
+            billing_address_2 = S.billing_address_2,
+            billing_city = S.billing_city,
+            billing_state = S.billing_state,
+            billing_postcode = S.billing_postcode,
+            billing_country = S.billing_country,
+            billing_email = S.billing_email,
+            billing_phone = S.billing_phone,
+            shipping_first_name = S.shipping_first_name,
+            shipping_last_name = S.shipping_last_name,
+            shipping_company = S.shipping_company,
+            shipping_address_1 = S.shipping_address_1,
+            shipping_address_2 = S.shipping_address_2,
+            shipping_city = S.shipping_city,
+            shipping_state = S.shipping_state,
+            shipping_postcode = S.shipping_postcode,
+            shipping_country = S.shipping_country,
+            shipping_phone = S.shipping_phone,
+            refund_total = S.refund_total,
+            customer_note = S.customer_note,
             updated_at = S.updated_at
         WHEN NOT MATCHED THEN
-          INSERT (order_id, date_created, total, status, customer_id, updated_at)
-          VALUES (S.order_id, S.date_created, S.total, S.status, S.customer_id, S.updated_at)
+          INSERT (order_id, order_number, status, currency, date_created, date_modified, date_paid, date_completed, customer_id, payment_method, payment_method_title, transaction_id, subtotal, cart_tax, shipping_total, shipping_tax, discount_total, discount_tax, total_tax, total, shipping_method, billing_first_name, billing_last_name, billing_company, billing_address_1, billing_address_2, billing_city, billing_state, billing_postcode, billing_country, billing_email, billing_phone, shipping_first_name, shipping_last_name, shipping_company, shipping_address_1, shipping_address_2, shipping_city, shipping_state, shipping_postcode, shipping_country, shipping_phone, refund_total, customer_note, created_via, updated_at)
+          VALUES (S.order_id, S.order_number, S.status, S.currency, S.date_created, S.date_modified, S.date_paid, S.date_completed, S.customer_id, S.payment_method, S.payment_method_title, S.transaction_id, S.subtotal, S.cart_tax, S.shipping_total, S.shipping_tax, S.discount_total, S.discount_tax, S.total_tax, S.total, S.shipping_method, S.billing_first_name, S.billing_last_name, S.billing_company, S.billing_address_1, S.billing_address_2, S.billing_city, S.billing_state, S.billing_postcode, S.billing_country, S.billing_email, S.billing_phone, S.shipping_first_name, S.shipping_last_name, S.shipping_company, S.shipping_address_1, S.shipping_address_2, S.shipping_city, S.shipping_state, S.shipping_postcode, S.shipping_country, S.shipping_phone, S.refund_total, S.customer_note, S.created_via, S.updated_at)
         """
         merge_job = client.query(merge_query)
         merge_job.result()
@@ -421,19 +520,46 @@ def load_products_to_bigquery(products: List[Dict]) -> int:
     transformed = []
     for product in products:
         try:
-            # Extract first category if available (with null safety)
+            # Extract categories as JSON string
             categories = product.get("categories", [])
-            category = None
-            if categories and isinstance(categories, list) and len(categories) > 0:
-                category = categories[0].get("name") if isinstance(categories[0], dict) else None
+            categories_json = json.dumps(categories) if categories else None
+            
+            # Extract tags as JSON string
+            tags = product.get("tags", [])
+            tags_json = json.dumps(tags) if tags else None
             
             transformed.append({
                 "product_id": product.get("id"),
                 "name": product.get("name"),
+                "slug": product.get("slug"),
                 "sku": product.get("sku"),
-                "price": float(product.get("price", 0)) if product.get("price") else 0.0,
-                "category": category,
+                "type": product.get("type"),
+                "status": product.get("status"),
+                "date_created": product.get("date_created"),
+                "date_modified": product.get("date_modified"),
+                # Pricing
+                "price": float(product.get("price")) if product.get("price") else None,
+                "regular_price": float(product.get("regular_price")) if product.get("regular_price") else None,
+                "sale_price": float(product.get("sale_price")) if product.get("sale_price") else None,
+                "on_sale": product.get("on_sale"),
+                "purchasable": product.get("purchasable"),
+                # Inventory
+                "stock_quantity": product.get("stock_quantity"),
                 "stock_status": product.get("stock_status"),
+                "total_sales": product.get("total_sales"),
+                "backorders_allowed": product.get("backorders_allowed"),
+                "backordered": product.get("backordered"),
+                # Shipping
+                "weight": float(product.get("weight")) if product.get("weight") else None,
+                "shipping_class": product.get("shipping_class"),
+                "shipping_required": product.get("shipping_required"),
+                # Reviews
+                "average_rating": float(product.get("average_rating")) if product.get("average_rating") else None,
+                "rating_count": product.get("rating_count"),
+                # Categories & Tags
+                "categories": categories_json,
+                "tags": tags_json,
+                # Metadata
                 "updated_at": datetime.utcnow().isoformat(),
             })
         except Exception as e:
@@ -462,14 +588,31 @@ def load_products_to_bigquery(products: List[Dict]) -> int:
         WHEN MATCHED THEN
           UPDATE SET 
             name = S.name,
-            sku = S.sku,
+            slug = S.slug,
+            type = S.type,
+            status = S.status,
+            date_modified = S.date_modified,
             price = S.price,
-            category = S.category,
+            regular_price = S.regular_price,
+            sale_price = S.sale_price,
+            on_sale = S.on_sale,
+            purchasable = S.purchasable,
+            stock_quantity = S.stock_quantity,
             stock_status = S.stock_status,
+            total_sales = S.total_sales,
+            backorders_allowed = S.backorders_allowed,
+            backordered = S.backordered,
+            weight = S.weight,
+            shipping_class = S.shipping_class,
+            shipping_required = S.shipping_required,
+            average_rating = S.average_rating,
+            rating_count = S.rating_count,
+            categories = S.categories,
+            tags = S.tags,
             updated_at = S.updated_at
         WHEN NOT MATCHED THEN
-          INSERT (product_id, name, sku, price, category, stock_status, updated_at)
-          VALUES (S.product_id, S.name, S.sku, S.price, S.category, S.stock_status, S.updated_at)
+          INSERT (product_id, name, slug, sku, type, status, date_created, date_modified, price, regular_price, sale_price, on_sale, purchasable, stock_quantity, stock_status, total_sales, backorders_allowed, backordered, weight, shipping_class, shipping_required, average_rating, rating_count, categories, tags, updated_at)
+          VALUES (S.product_id, S.name, S.slug, S.sku, S.type, S.status, S.date_created, S.date_modified, S.price, S.regular_price, S.sale_price, S.on_sale, S.purchasable, S.stock_quantity, S.stock_status, S.total_sales, S.backorders_allowed, S.backordered, S.weight, S.shipping_class, S.shipping_required, S.average_rating, S.rating_count, S.categories, S.tags, S.updated_at)
         """
         merge_job = client.query(merge_query)
         merge_job.result()
@@ -494,45 +637,16 @@ def load_customers_to_bigquery(customers: List[Dict]) -> int:
     transformed = []
     for customer in customers:
         try:
-            billing = customer.get("billing", {})
-            shipping = customer.get("shipping", {})
-            
-            # Contact info (fallback to billing/shipping if missing)
-            first_name = customer.get("first_name") or billing.get("first_name") or shipping.get("first_name") or None
-            last_name = customer.get("last_name") or billing.get("last_name") or shipping.get("last_name") or None
-            company = customer.get("company") or billing.get("company") or shipping.get("company") or None
-            
             transformed.append({
                 "customer_id": customer.get("id"),
                 "email": customer.get("email"),
-                # Contact info
-                "first_name": first_name,
-                "last_name": last_name,
-                "company": company,
-                # Billing Address
-                "billing_first_name": billing.get("first_name"),
-                "billing_last_name": billing.get("last_name"),
-                "billing_company": billing.get("company"),
-                "billing_address_1": billing.get("address_1"),
-                "billing_address_2": billing.get("address_2"),
-                "billing_city": billing.get("city"),
-                "billing_state": billing.get("state"),
-                "billing_postcode": billing.get("postcode"),
-                "billing_country": billing.get("country"),
-                "billing_email": billing.get("email"),
-                "billing_phone": billing.get("phone"),
-                # Shipping Address
-                "shipping_first_name": shipping.get("first_name"),
-                "shipping_last_name": shipping.get("last_name"),
-                "shipping_company": shipping.get("company"),
-                "shipping_address_1": shipping.get("address_1"),
-                "shipping_address_2": shipping.get("address_2"),
-                "shipping_city": shipping.get("city"),
-                "shipping_state": shipping.get("state"),
-                "shipping_postcode": shipping.get("postcode"),
-                "shipping_country": shipping.get("country"),
-                # Metrics
-                "total_spent": float(customer.get("total_spent", 0)) if customer.get("total_spent") else None,
+                "first_name": customer.get("first_name"),
+                "last_name": customer.get("last_name"),
+                "username": customer.get("username"),
+                "role": customer.get("role"),
+                "is_paying_customer": customer.get("is_paying_customer"),
+                "date_created": customer.get("date_created"),
+                "date_modified": customer.get("date_modified"),
                 "updated_at": datetime.utcnow().isoformat(),
             })
         except Exception as e:
@@ -563,32 +677,14 @@ def load_customers_to_bigquery(customers: List[Dict]) -> int:
             email = S.email,
             first_name = S.first_name,
             last_name = S.last_name,
-            company = S.company,
-            billing_first_name = S.billing_first_name,
-            billing_last_name = S.billing_last_name,
-            billing_company = S.billing_company,
-            billing_address_1 = S.billing_address_1,
-            billing_address_2 = S.billing_address_2,
-            billing_city = S.billing_city,
-            billing_state = S.billing_state,
-            billing_postcode = S.billing_postcode,
-            billing_country = S.billing_country,
-            billing_email = S.billing_email,
-            billing_phone = S.billing_phone,
-            shipping_first_name = S.shipping_first_name,
-            shipping_last_name = S.shipping_last_name,
-            shipping_company = S.shipping_company,
-            shipping_address_1 = S.shipping_address_1,
-            shipping_address_2 = S.shipping_address_2,
-            shipping_city = S.shipping_city,
-            shipping_state = S.shipping_state,
-            shipping_postcode = S.shipping_postcode,
-            shipping_country = S.shipping_country,
-            total_spent = S.total_spent,
+            username = S.username,
+            role = S.role,
+            is_paying_customer = S.is_paying_customer,
+            date_modified = S.date_modified,
             updated_at = S.updated_at
         WHEN NOT MATCHED THEN
-          INSERT (customer_id, email, first_name, last_name, company, billing_first_name, billing_last_name, billing_company, billing_address_1, billing_address_2, billing_city, billing_state, billing_postcode, billing_country, billing_email, billing_phone, shipping_first_name, shipping_last_name, shipping_company, shipping_address_1, shipping_address_2, shipping_city, shipping_state, shipping_postcode, shipping_country, total_spent, updated_at)
-          VALUES (S.customer_id, S.email, S.first_name, S.last_name, S.company, S.billing_first_name, S.billing_last_name, S.billing_company, S.billing_address_1, S.billing_address_2, S.billing_city, S.billing_state, S.billing_postcode, S.billing_country, S.billing_email, S.billing_phone, S.shipping_first_name, S.shipping_last_name, S.shipping_company, S.shipping_address_1, S.shipping_address_2, S.shipping_city, S.shipping_state, S.shipping_postcode, S.shipping_country, S.total_spent, S.updated_at)
+          INSERT (customer_id, email, first_name, last_name, username, role, is_paying_customer, date_created, date_modified, updated_at)
+          VALUES (S.customer_id, S.email, S.first_name, S.last_name, S.username, S.role, S.is_paying_customer, S.date_created, S.date_modified, S.updated_at)
         """
         merge_job = client.query(merge_query)
         merge_job.result()
