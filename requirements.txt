@@ -1,6 +1,6 @@
 Flask==3.0.0
 google-cloud-bigquery==3.14.1
 google-cloud-secret-manager==2.16.4
-google-cloud-firestore==2.14.1
+google-cloud-firestore==2.14.0
 requests==2.31.0
 gunicorn==21.2.0

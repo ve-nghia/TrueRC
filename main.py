@@ -17,8 +17,8 @@ from typing import Dict, List, Any, Optional
 
 import requests
 from google.cloud import bigquery
-from google.cloud import secretmanager
 from google.cloud import firestore
+from google.cloud import secretmanager
 
 # Initialize Flask app
 app = Flask(__name__)
