@@ -100,7 +100,7 @@ def fetch_woo_data_batch(
 
 def fetch_woo_data_all(
     endpoint: str, per_page: int = 1000, after: Optional[str] = None,
-    orderby: Optional[str] = "date", order: Optional[str] = "asc",
+    orderby: Optional[str] = None, order: Optional[str] = None,
 ) -> List[Dict]:
     """Fetch ALL pages of data from WooCommerce API."""
     all_records = []
