@@ -205,11 +205,13 @@ def load_orders_to_bigquery(orders: List[Dict]) -> int:
         job_config = bigquery.LoadJobConfig(write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE, autodetect=True)
         load_job = client.load_table_from_json(transformed, temp_table, job_config=job_config)
         load_job.result()
-        merge_cols = "order_number, status, currency, date_created, date_modified, date_paid, date_completed, customer_id, payment_method, payment_method_title, transaction_id, subtotal, cart_tax, shipping_total, shipping_tax, discount_total, discount_tax, total_tax, total, shipping_method, billing_first_name, billing_last_name, billing_company, billing_address_1, billing_address_2, billing_city, billing_state, billing_postcode, billing_country, billing_email, billing_phone, shipping_first_name, shipping_last_name, shipping_company, shipping_address_1, shipping_address_2, shipping_city, shipping_state, shipping_postcode, shipping_country, shipping_phone, refund_total, customer_note, created_via, updated_at"
-        merge_vals = "S.order_number, S.status, S.currency, S.date_created, S.date_modified, S.date_paid, S.date_completed, S.customer_id, S.payment_method, S.payment_method_title, S.transaction_id, S.subtotal, S.cart_tax, S.shipping_total, S.shipping_tax, S.discount_total, S.discount_tax, S.total_tax, S.total, S.shipping_method, S.billing_first_name, S.billing_last_name, S.billing_company, S.billing_address_1, S.billing_address_2, S.billing_city, S.billing_state, S.billing_postcode, S.billing_country, S.billing_email, S.billing_phone, S.shipping_first_name, S.shipping_last_name, S.shipping_company, S.shipping_address_1, S.shipping_address_2, S.shipping_city, S.shipping_state, S.shipping_postcode, S.shipping_country, S.shipping_phone, S.refund_total, S.customer_note, S.created_via, S.updated_at"
+        cols = ["order_number", "status", "currency", "date_created", "date_modified", "date_paid", "date_completed", "customer_id", "payment_method", "payment_method_title", "transaction_id", "subtotal", "cart_tax", "shipping_total", "shipping_tax", "discount_total", "discount_tax", "total_tax", "total", "shipping_method", "billing_first_name", "billing_last_name", "billing_company", "billing_address_1", "billing_address_2", "billing_city", "billing_state", "billing_postcode", "billing_country", "billing_email", "billing_phone", "shipping_first_name", "shipping_last_name", "shipping_company", "shipping_address_1", "shipping_address_2", "shipping_city", "shipping_state", "shipping_postcode", "shipping_country", "shipping_phone", "refund_total", "customer_note", "created_via", "updated_at"]
+        update_set = ", ".join([f"{col} = S.{col}" for col in cols])
+        insert_cols = "order_id, " + ", ".join(cols)
+        insert_vals = "S.order_id, " + ", ".join([f"S.{col}" for col in cols])
         merge_query = f"""MERGE INTO `{table_id}` T USING `{temp_table}` S ON T.order_id = S.order_id
-        WHEN MATCHED THEN UPDATE SET {merge_cols}
-        WHEN NOT MATCHED THEN INSERT (order_id, {merge_cols}) VALUES (S.order_id, {merge_vals})"""
+        WHEN MATCHED THEN UPDATE SET {update_set}
+        WHEN NOT MATCHED THEN INSERT ({insert_cols}) VALUES ({insert_vals})"""
         client.query(merge_query).result()
         logger.info(f"✓ MERGE completed for orders ({len(transformed)} rows)")
         return len(transformed)
