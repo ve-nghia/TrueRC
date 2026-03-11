@@ -143,12 +143,58 @@ def load_orders_to_bigquery(orders: List[Dict]) -> int:
     transformed = []
     for order in orders:
         try:
+            shipping_lines = order.get("shipping_lines", [])
+            shipping_method = shipping_lines[0].get("method_title") if shipping_lines else None
+            refunds = order.get("refunds", [])
+            refund_total = sum(float(r.get("total", 0)) for r in refunds) if refunds else 0.0
+            billing = order.get("billing", {})
+            shipping = order.get("shipping", {})
             transformed.append({
                 "order_id": order.get("id"),
-                "date_created": order.get("date_created"),
-                "total": float(order.get("total", 0)),
+                "order_number": order.get("number"),
                 "status": order.get("status"),
+                "currency": order.get("currency"),
+                "date_created": order.get("date_created"),
+                "date_modified": order.get("date_modified"),
+                "date_paid": order.get("date_paid"),
+                "date_completed": order.get("date_completed"),
                 "customer_id": order.get("customer_id"),
+                "payment_method": order.get("payment_method"),
+                "payment_method_title": order.get("payment_method_title"),
+                "transaction_id": order.get("transaction_id"),
+                "subtotal": float(order.get("subtotal", 0)) if order.get("subtotal") else None,
+                "cart_tax": float(order.get("cart_tax", 0)) if order.get("cart_tax") else None,
+                "shipping_total": float(order.get("shipping_total", 0)) if order.get("shipping_total") else None,
+                "shipping_tax": float(order.get("shipping_tax", 0)) if order.get("shipping_tax") else None,
+                "discount_total": float(order.get("discount_total", 0)) if order.get("discount_total") else None,
+                "discount_tax": float(order.get("discount_tax", 0)) if order.get("discount_tax") else None,
+                "total_tax": float(order.get("total_tax", 0)) if order.get("total_tax") else None,
+                "total": float(order.get("total", 0)) if order.get("total") else None,
+                "shipping_method": shipping_method,
+                "billing_first_name": billing.get("first_name"),
+                "billing_last_name": billing.get("last_name"),
+                "billing_company": billing.get("company"),
+                "billing_address_1": billing.get("address_1"),
+                "billing_address_2": billing.get("address_2"),
+                "billing_city": billing.get("city"),
+                "billing_state": billing.get("state"),
+                "billing_postcode": billing.get("postcode"),
+                "billing_country": billing.get("country"),
+                "billing_email": billing.get("email"),
+                "billing_phone": billing.get("phone"),
+                "shipping_first_name": shipping.get("first_name"),
+                "shipping_last_name": shipping.get("last_name"),
+                "shipping_company": shipping.get("company"),
+                "shipping_address_1": shipping.get("address_1"),
+                "shipping_address_2": shipping.get("address_2"),
+                "shipping_city": shipping.get("city"),
+                "shipping_state": shipping.get("state"),
+                "shipping_postcode": shipping.get("postcode"),
+                "shipping_country": shipping.get("country"),
+                "shipping_phone": shipping.get("phone"),
+                "refund_total": refund_total if refund_total > 0 else None,
+                "customer_note": order.get("customer_note"),
+                "created_via": order.get("created_via"),
                 "updated_at": datetime.utcnow().isoformat(),
             })
         except Exception as e:
@@ -159,9 +205,11 @@ def load_orders_to_bigquery(orders: List[Dict]) -> int:
         job_config = bigquery.LoadJobConfig(write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE, autodetect=True)
         load_job = client.load_table_from_json(transformed, temp_table, job_config=job_config)
         load_job.result()
+        merge_cols = "order_number, status, currency, date_created, date_modified, date_paid, date_completed, customer_id, payment_method, payment_method_title, transaction_id, subtotal, cart_tax, shipping_total, shipping_tax, discount_total, discount_tax, total_tax, total, shipping_method, billing_first_name, billing_last_name, billing_company, billing_address_1, billing_address_2, billing_city, billing_state, billing_postcode, billing_country, billing_email, billing_phone, shipping_first_name, shipping_last_name, shipping_company, shipping_address_1, shipping_address_2, shipping_city, shipping_state, shipping_postcode, shipping_country, shipping_phone, refund_total, customer_note, created_via, updated_at"
+        merge_vals = "S.order_number, S.status, S.currency, S.date_created, S.date_modified, S.date_paid, S.date_completed, S.customer_id, S.payment_method, S.payment_method_title, S.transaction_id, S.subtotal, S.cart_tax, S.shipping_total, S.shipping_tax, S.discount_total, S.discount_tax, S.total_tax, S.total, S.shipping_method, S.billing_first_name, S.billing_last_name, S.billing_company, S.billing_address_1, S.billing_address_2, S.billing_city, S.billing_state, S.billing_postcode, S.billing_country, S.billing_email, S.billing_phone, S.shipping_first_name, S.shipping_last_name, S.shipping_company, S.shipping_address_1, S.shipping_address_2, S.shipping_city, S.shipping_state, S.shipping_postcode, S.shipping_country, S.shipping_phone, S.refund_total, S.customer_note, S.created_via, S.updated_at"
         merge_query = f"""MERGE INTO `{table_id}` T USING `{temp_table}` S ON T.order_id = S.order_id
-        WHEN MATCHED THEN UPDATE SET date_created = S.date_created, total = S.total, status = S.status, customer_id = S.customer_id, updated_at = S.updated_at
-        WHEN NOT MATCHED THEN INSERT (order_id, date_created, total, status, customer_id, updated_at) VALUES (S.order_id, S.date_created, S.total, S.status, S.customer_id, S.updated_at)"""
+        WHEN MATCHED THEN UPDATE SET {merge_cols}
+        WHEN NOT MATCHED THEN INSERT (order_id, {merge_cols}) VALUES (S.order_id, {merge_vals})"""
         client.query(merge_query).result()
         logger.info(f"✓ MERGE completed for orders ({len(transformed)} rows)")
         return len(transformed)
