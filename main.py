@@ -149,6 +149,14 @@ def load_orders_to_bigquery(orders: List[Dict]) -> int:
             refund_total = sum(float(r.get("total", 0)) for r in refunds) if refunds else 0.0
             billing = order.get("billing", {})
             shipping = order.get("shipping", {})
+            def safe_float(val):
+                try:
+                    if val is None or val == "": return None
+                    f = float(val)
+                    return f if f != 0 else None
+                except (ValueError, TypeError):
+                    return None
+            
             transformed.append({
                 "order_id": order.get("id"),
                 "order_number": order.get("number"),
@@ -162,14 +170,14 @@ def load_orders_to_bigquery(orders: List[Dict]) -> int:
                 "payment_method": order.get("payment_method"),
                 "payment_method_title": order.get("payment_method_title"),
                 "transaction_id": order.get("transaction_id"),
-                "subtotal": float(order.get("subtotal", 0)) if order.get("subtotal") else None,
-                "cart_tax": float(order.get("cart_tax", 0)) if order.get("cart_tax") else None,
-                "shipping_total": float(order.get("shipping_total", 0)) if order.get("shipping_total") else None,
-                "shipping_tax": float(order.get("shipping_tax", 0)) if order.get("shipping_tax") else None,
-                "discount_total": float(order.get("discount_total", 0)) if order.get("discount_total") else None,
-                "discount_tax": float(order.get("discount_tax", 0)) if order.get("discount_tax") else None,
-                "total_tax": float(order.get("total_tax", 0)) if order.get("total_tax") else None,
-                "total": float(order.get("total", 0)) if order.get("total") else None,
+                "subtotal": safe_float(order.get("subtotal")),
+                "cart_tax": safe_float(order.get("cart_tax")),
+                "shipping_total": safe_float(order.get("shipping_total")),
+                "shipping_tax": safe_float(order.get("shipping_tax")),
+                "discount_total": safe_float(order.get("discount_total")),
+                "discount_tax": safe_float(order.get("discount_tax")),
+                "total_tax": safe_float(order.get("total_tax")),
+                "total": safe_float(order.get("total")),
                 "shipping_method": shipping_method,
                 "billing_first_name": billing.get("first_name"),
                 "billing_last_name": billing.get("last_name"),
@@ -202,7 +210,55 @@ def load_orders_to_bigquery(orders: List[Dict]) -> int:
     if not transformed: return 0
     temp_table = f"{PROJECT_ID}.{DATASET_ID}.temp_orders_{int(datetime.utcnow().timestamp())}"
     try:
-        job_config = bigquery.LoadJobConfig(write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE, autodetect=True)
+        schema = [
+            bigquery.SchemaField("order_id", "INTEGER"),
+            bigquery.SchemaField("order_number", "INTEGER"),
+            bigquery.SchemaField("status", "STRING"),
+            bigquery.SchemaField("currency", "STRING"),
+            bigquery.SchemaField("date_created", "TIMESTAMP"),
+            bigquery.SchemaField("date_modified", "TIMESTAMP"),
+            bigquery.SchemaField("date_paid", "TIMESTAMP"),
+            bigquery.SchemaField("date_completed", "TIMESTAMP"),
+            bigquery.SchemaField("customer_id", "INTEGER"),
+            bigquery.SchemaField("payment_method", "STRING"),
+            bigquery.SchemaField("payment_method_title", "STRING"),
+            bigquery.SchemaField("transaction_id", "STRING"),
+            bigquery.SchemaField("subtotal", "FLOAT64"),
+            bigquery.SchemaField("cart_tax", "FLOAT64"),
+            bigquery.SchemaField("shipping_total", "FLOAT64"),
+            bigquery.SchemaField("shipping_tax", "FLOAT64"),
+            bigquery.SchemaField("discount_total", "FLOAT64"),
+            bigquery.SchemaField("discount_tax", "FLOAT64"),
+            bigquery.SchemaField("total_tax", "FLOAT64"),
+            bigquery.SchemaField("total", "FLOAT64"),
+            bigquery.SchemaField("shipping_method", "STRING"),
+            bigquery.SchemaField("billing_first_name", "STRING"),
+            bigquery.SchemaField("billing_last_name", "STRING"),
+            bigquery.SchemaField("billing_company", "STRING"),
+            bigquery.SchemaField("billing_address_1", "STRING"),
+            bigquery.SchemaField("billing_address_2", "STRING"),
+            bigquery.SchemaField("billing_city", "STRING"),
+            bigquery.SchemaField("billing_state", "STRING"),
+            bigquery.SchemaField("billing_postcode", "STRING"),
+            bigquery.SchemaField("billing_country", "STRING"),
+            bigquery.SchemaField("billing_email", "STRING"),
+            bigquery.SchemaField("billing_phone", "STRING"),
+            bigquery.SchemaField("shipping_first_name", "STRING"),
+            bigquery.SchemaField("shipping_last_name", "STRING"),
+            bigquery.SchemaField("shipping_company", "STRING"),
+            bigquery.SchemaField("shipping_address_1", "STRING"),
+            bigquery.SchemaField("shipping_address_2", "STRING"),
+            bigquery.SchemaField("shipping_city", "STRING"),
+            bigquery.SchemaField("shipping_state", "STRING"),
+            bigquery.SchemaField("shipping_postcode", "STRING"),
+            bigquery.SchemaField("shipping_country", "STRING"),
+            bigquery.SchemaField("shipping_phone", "STRING"),
+            bigquery.SchemaField("refund_total", "FLOAT64"),
+            bigquery.SchemaField("customer_note", "STRING"),
+            bigquery.SchemaField("created_via", "STRING"),
+            bigquery.SchemaField("updated_at", "TIMESTAMP"),
+        ]
+        job_config = bigquery.LoadJobConfig(schema=schema, write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE)
         load_job = client.load_table_from_json(transformed, temp_table, job_config=job_config)
         load_job.result()
         cols = ["order_number", "status", "currency", "date_created", "date_modified", "date_paid", "date_completed", "customer_id", "payment_method", "payment_method_title", "transaction_id", "subtotal", "cart_tax", "shipping_total", "shipping_tax", "discount_total", "discount_tax", "total_tax", "total", "shipping_method", "billing_first_name", "billing_last_name", "billing_company", "billing_address_1", "billing_address_2", "billing_city", "billing_state", "billing_postcode", "billing_country", "billing_email", "billing_phone", "shipping_first_name", "shipping_last_name", "shipping_company", "shipping_address_1", "shipping_address_2", "shipping_city", "shipping_state", "shipping_postcode", "shipping_country", "shipping_phone", "refund_total", "customer_note", "created_via", "updated_at"]
