@@ -78,8 +78,8 @@ def update_sync_metadata(table_name: str, records_loaded: int) -> None:
         client = bigquery.Client(project=PROJECT_ID)
         query = f"""MERGE INTO `{PROJECT_ID}.{DATASET_ID}.sync_metadata` T
         USING (SELECT @table_name as sync_name) S ON T.sync_name = S.sync_name
-        WHEN MATCHED THEN UPDATE SET last_sync_time = CURRENT_DATETIME(), records_loaded = @records, updated_at = CURRENT_TIMESTAMP()
-        WHEN NOT MATCHED THEN INSERT (sync_name, last_sync_time, records_loaded, updated_at) VALUES (@table_name, CURRENT_DATETIME(), @records, CURRENT_TIMESTAMP())"""
+        WHEN MATCHED THEN UPDATE SET last_sync_time = CURRENT_TIMESTAMP(), records_loaded = @records, updated_at = CURRENT_TIMESTAMP()
+        WHEN NOT MATCHED THEN INSERT (sync_name, last_sync_time, records_loaded, updated_at) VALUES (@table_name, CURRENT_TIMESTAMP(), @records, CURRENT_TIMESTAMP())"""
         job_config = bigquery.QueryJobConfig(query_parameters=[
             bigquery.ScalarQueryParameter("table_name", "STRING", table_name),
             bigquery.ScalarQueryParameter("records", "INT64", records_loaded),
