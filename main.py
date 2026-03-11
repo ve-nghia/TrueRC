@@ -245,7 +245,7 @@ def init_products_customers():
         customers_loaded = 0
         if customer_count == 0:
             logger.info("Customers table empty. Fetching all customers...")
-            customers = fetch_woo_data_all("/customers", orderby="id", order="asc")
+            customers = fetch_woo_data_all("/customers")
             if customers:
                 customers_loaded = load_customers_to_bigquery(customers)
                 logger.info(f"✓ Loaded {customers_loaded} customers")
