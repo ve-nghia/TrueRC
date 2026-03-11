@@ -494,12 +494,45 @@ def load_customers_to_bigquery(customers: List[Dict]) -> int:
     transformed = []
     for customer in customers:
         try:
+            billing = customer.get("billing", {})
+            shipping = customer.get("shipping", {})
+            
+            # Contact info (fallback to billing/shipping if missing)
+            first_name = customer.get("first_name") or billing.get("first_name") or shipping.get("first_name") or None
+            last_name = customer.get("last_name") or billing.get("last_name") or shipping.get("last_name") or None
+            company = customer.get("company") or billing.get("company") or shipping.get("company") or None
+            
             transformed.append({
                 "customer_id": customer.get("id"),
                 "email": customer.get("email"),
-                "first_name": customer.get("first_name"),
-                "last_name": customer.get("last_name"),
-                "total_spent": float(customer.get("total_spent", 0)),
+                # Contact info
+                "first_name": first_name,
+                "last_name": last_name,
+                "company": company,
+                # Billing Address
+                "billing_first_name": billing.get("first_name"),
+                "billing_last_name": billing.get("last_name"),
+                "billing_company": billing.get("company"),
+                "billing_address_1": billing.get("address_1"),
+                "billing_address_2": billing.get("address_2"),
+                "billing_city": billing.get("city"),
+                "billing_state": billing.get("state"),
+                "billing_postcode": billing.get("postcode"),
+                "billing_country": billing.get("country"),
+                "billing_email": billing.get("email"),
+                "billing_phone": billing.get("phone"),
+                # Shipping Address
+                "shipping_first_name": shipping.get("first_name"),
+                "shipping_last_name": shipping.get("last_name"),
+                "shipping_company": shipping.get("company"),
+                "shipping_address_1": shipping.get("address_1"),
+                "shipping_address_2": shipping.get("address_2"),
+                "shipping_city": shipping.get("city"),
+                "shipping_state": shipping.get("state"),
+                "shipping_postcode": shipping.get("postcode"),
+                "shipping_country": shipping.get("country"),
+                # Metrics
+                "total_spent": float(customer.get("total_spent", 0)) if customer.get("total_spent") else None,
                 "updated_at": datetime.utcnow().isoformat(),
             })
         except Exception as e:
@@ -530,11 +563,32 @@ def load_customers_to_bigquery(customers: List[Dict]) -> int:
             email = S.email,
             first_name = S.first_name,
             last_name = S.last_name,
+            company = S.company,
+            billing_first_name = S.billing_first_name,
+            billing_last_name = S.billing_last_name,
+            billing_company = S.billing_company,
+            billing_address_1 = S.billing_address_1,
+            billing_address_2 = S.billing_address_2,
+            billing_city = S.billing_city,
+            billing_state = S.billing_state,
+            billing_postcode = S.billing_postcode,
+            billing_country = S.billing_country,
+            billing_email = S.billing_email,
+            billing_phone = S.billing_phone,
+            shipping_first_name = S.shipping_first_name,
+            shipping_last_name = S.shipping_last_name,
+            shipping_company = S.shipping_company,
+            shipping_address_1 = S.shipping_address_1,
+            shipping_address_2 = S.shipping_address_2,
+            shipping_city = S.shipping_city,
+            shipping_state = S.shipping_state,
+            shipping_postcode = S.shipping_postcode,
+            shipping_country = S.shipping_country,
             total_spent = S.total_spent,
             updated_at = S.updated_at
         WHEN NOT MATCHED THEN
-          INSERT (customer_id, email, first_name, last_name, total_spent, updated_at)
-          VALUES (S.customer_id, S.email, S.first_name, S.last_name, S.total_spent, S.updated_at)
+          INSERT (customer_id, email, first_name, last_name, company, billing_first_name, billing_last_name, billing_company, billing_address_1, billing_address_2, billing_city, billing_state, billing_postcode, billing_country, billing_email, billing_phone, shipping_first_name, shipping_last_name, shipping_company, shipping_address_1, shipping_address_2, shipping_city, shipping_state, shipping_postcode, shipping_country, total_spent, updated_at)
+          VALUES (S.customer_id, S.email, S.first_name, S.last_name, S.company, S.billing_first_name, S.billing_last_name, S.billing_company, S.billing_address_1, S.billing_address_2, S.billing_city, S.billing_state, S.billing_postcode, S.billing_country, S.billing_email, S.billing_phone, S.shipping_first_name, S.shipping_last_name, S.shipping_company, S.shipping_address_1, S.shipping_address_2, S.shipping_city, S.shipping_state, S.shipping_postcode, S.shipping_country, S.total_spent, S.updated_at)
         """
         merge_job = client.query(merge_query)
         merge_job.result()
@@ -688,7 +742,7 @@ def sync_woocommerce():
         logger.info(f"Resuming from batch {current_batch_number}, total loaded: {records_loaded_total}")
         
         # Batch parameters
-        batch_size = 100
+        batch_size = 500  # Increased from 100 - system can handle it (6k customers loaded in <1min)
         page_number = current_batch_number + 1  # Page numbers start at 1
         
         # 1. Fetch ONE batch (page) of orders (oldest first for historical backfill)
