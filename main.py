@@ -190,8 +190,8 @@ def fetch_woo_data_batch(
     page: int,
     per_page: int = 100,
     after: Optional[str] = None,
-    orderby: str = "date",
-    order: str = "asc",
+    orderby: Optional[str] = "date",
+    order: Optional[str] = "asc",
 ) -> List[Dict]:
     """Fetch ONE page of data from WooCommerce API with retry logic."""
     url = f"{WOO_API_BASE}{endpoint}"
@@ -200,9 +200,13 @@ def fetch_woo_data_batch(
     params = {
         "per_page": per_page,
         "page": page,
-        "orderby": orderby,  # "date" for orders
-        "order": order,      # "asc" for oldest first, "desc" for newest first
     }
+    # Only add orderby/order if specified (some endpoints don't support them)
+    if orderby:
+        params["orderby"] = orderby
+    if order:
+        params["order"] = order
+    
     if after:
         params["after"] = after
     
@@ -251,8 +255,8 @@ def fetch_woo_data_all(
     endpoint: str,
     per_page: int = 100,
     after: Optional[str] = None,
-    orderby: str = "date",
-    order: str = "asc",
+    orderby: Optional[str] = "date",
+    order: Optional[str] = "asc",
 ) -> List[Dict]:
     """Fetch ALL pages of data from WooCommerce API."""
     all_records = []
@@ -544,20 +548,95 @@ def load_customers_to_bigquery(customers: List[Dict]) -> int:
             logger.warning(f"Failed to delete temp table: {e}")
 
 
+@app.route('/init', methods=['POST'])
+def init_products_customers():
+    """
+    Initialize products and customers (one-time only).
+    
+    On first call: Fetches all products and customers from WooCommerce, loads to BigQuery.
+    On subsequent calls: Returns "already_initialized" (does nothing).
+    
+    Call this ONCE before starting the order backfill.
+    """
+    logger.info("Checking if products/customers already initialized...")
+    
+    try:
+        client = bigquery.Client(project=PROJECT_ID)
+        
+        # Check if products table already has data
+        result = client.query(
+            f"SELECT COUNT(*) as cnt FROM `{PROJECT_ID}.{DATASET_ID}.products`"
+        ).result()
+        product_count = next(result)[0]
+        
+        if product_count > 0:
+            logger.info(f"Products/customers already initialized ({product_count} products exist). Skipping.")
+            return jsonify({
+                "status": "already_initialized",
+                "message": f"Products/customers already loaded ({product_count} products exist). Use POST / for order backfill.",
+                "timestamp": datetime.utcnow().isoformat(),
+            }), 200
+        
+        # First time only - load products and customers
+        logger.info("Initializing products and customers (first time)...")
+        
+        # Fetch all products
+        logger.info("Fetching all products...")
+        products = fetch_woo_data_all("/products", orderby="id", order="asc")
+        if products:
+            products_loaded = load_products_to_bigquery(products)
+            update_sync_metadata("products", products_loaded)
+            logger.info(f"✓ Loaded {products_loaded} products")
+        else:
+            products_loaded = 0
+            logger.warning("No products fetched")
+        
+        # Fetch all customers
+        logger.info("Fetching all customers...")
+        customers = fetch_woo_data_all("/customers", orderby="id", order="asc")
+        if customers:
+            customers_loaded = load_customers_to_bigquery(customers)
+            update_sync_metadata("customers", customers_loaded)
+            logger.info(f"✓ Loaded {customers_loaded} customers")
+        else:
+            customers_loaded = 0
+            logger.warning("No customers fetched")
+        
+        result = {
+            "status": "success",
+            "timestamp": datetime.utcnow().isoformat(),
+            "products_loaded": products_loaded,
+            "customers_loaded": customers_loaded,
+            "message": "One-time init complete. Now use POST / for order backfill.",
+        }
+        logger.info(f"✓ Init complete: {json.dumps(result, indent=2)}")
+        return jsonify(result), 200
+        
+    except Exception as e:
+        logger.error(f"✗ Init failed: {e}", exc_info=True)
+        return jsonify({
+            "status": "error",
+            "timestamp": datetime.utcnow().isoformat(),
+            "error": str(e),
+        }), 500
+
+
 @app.route('/', methods=['POST'])
 def sync_woocommerce():
     """
-    Main Cloud Run endpoint: Sync WooCommerce data to BigQuery (batch processing).
+    Main Cloud Run endpoint: Sync WooCommerce orders to BigQuery (historical backfill).
+    
+    IMPORTANT: Call POST /init FIRST (one-time) to initialize products/customers.
     
     Historical Backfill Mode:
     - Fetches orders from oldest → newest (orderby=date, order=asc)
     - Processes 100 orders per execution
     - Tracks progress in sync_state_woocommerce (batch_number)
-    - Refreshes products/customers every 10 batches (~10 hours)
+    - Does NOT fetch products/customers (handled by /init endpoint)
     
-    After initial backfill completes, switches to daily incremental syncs.
+    After all orders loaded, signals completion and switches to daily incremental syncs.
     """
-    logger.info("Starting WooCommerce → BigQuery sync (historical backfill mode)...")
+    logger.info("Starting WooCommerce → BigQuery sync (order backfill mode)...")
     
     # Initialize Firestore with explicit project_id
     db = firestore.Client(project=PROJECT_ID)
@@ -628,22 +707,10 @@ def sync_woocommerce():
         items_loaded = load_order_items_to_bigquery(batch_orders)
         update_sync_metadata("order_items", items_loaded)
         
-        # 4. Fetch and update products (incremental - fetch all products weekly, not just initial)
-        # During backfill: fetch every batch to catch product changes
+        # 4-5. NOTE: Products and customers initialized via /init endpoint (one-time only)
+        # This endpoint focuses only on order backfill
         products_loaded = 0
-        if current_batch_number % 10 == 0:  # Every 10 batches (~10 hours), refresh products
-            logger.info("Fetching all products for incremental update (most recently modified first)...")
-            products = fetch_woo_data_all("/products", orderby="modified", order="desc")
-            products_loaded = load_products_to_bigquery(products)
-            update_sync_metadata("products", products_loaded)
-        
-        # 5. Fetch and update customers (incremental - fetch all customers weekly, not just initial)
         customers_loaded = 0
-        if current_batch_number % 10 == 0:  # Every 10 batches (~10 hours), refresh customers
-            logger.info("Fetching all customers for incremental update...")
-            customers = fetch_woo_data_all("/customers")
-            customers_loaded = load_customers_to_bigquery(customers)
-            update_sync_metadata("customers", customers_loaded)
         
         # Update batch tracking
         last_order_id = batch_orders[-1].get("id") if batch_orders else None
