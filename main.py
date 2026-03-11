@@ -102,7 +102,7 @@ def fetch_woo_data_batch(
     return []
 
 def fetch_woo_data_all(
-    endpoint: str, per_page: int = 500, after: Optional[str] = None,
+    endpoint: str, per_page: int = 1000, after: Optional[str] = None,
     orderby: Optional[str] = "date", order: Optional[str] = "asc",
 ) -> List[Dict]:
     """Fetch ALL pages of data from WooCommerce API."""
@@ -256,7 +256,7 @@ def init_products_customers():
         
         if customer_count == 0:
             logger.info("Customers table empty. Fetching all customers...")
-            customers = fetch_woo_data_all("/customers", orderby="id", order="asc")
+            customers = fetch_woo_data_all("/customers", orderby=None, order=None)
             if customers:
                 customers_loaded = load_customers_to_bigquery(customers)
                 logger.info(f"✓ Loaded {customers_loaded} customers")
