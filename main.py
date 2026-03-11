@@ -190,6 +190,8 @@ def fetch_woo_data_batch(
     page: int,
     per_page: int = 100,
     after: Optional[str] = None,
+    orderby: str = "date",
+    order: str = "asc",
 ) -> List[Dict]:
     """Fetch ONE page of data from WooCommerce API with retry logic."""
     url = f"{WOO_API_BASE}{endpoint}"
@@ -198,6 +200,8 @@ def fetch_woo_data_batch(
     params = {
         "per_page": per_page,
         "page": page,
+        "orderby": orderby,  # "date" for orders
+        "order": order,      # "asc" for oldest first, "desc" for newest first
     }
     if after:
         params["after"] = after
@@ -247,13 +251,15 @@ def fetch_woo_data_all(
     endpoint: str,
     per_page: int = 100,
     after: Optional[str] = None,
+    orderby: str = "date",
+    order: str = "asc",
 ) -> List[Dict]:
     """Fetch ALL pages of data from WooCommerce API."""
     all_records = []
     page = 1
     
     while True:
-        records = fetch_woo_data_batch(endpoint, page, per_page, after)
+        records = fetch_woo_data_batch(endpoint, page, per_page, after, orderby, order)
         if not records:
             break
         all_records.extend(records)
@@ -540,8 +546,18 @@ def load_customers_to_bigquery(customers: List[Dict]) -> int:
 
 @app.route('/', methods=['POST'])
 def sync_woocommerce():
-    """Main Cloud Run endpoint: Sync WooCommerce data to BigQuery (batch processing)."""
-    logger.info("Starting WooCommerce → BigQuery sync...")
+    """
+    Main Cloud Run endpoint: Sync WooCommerce data to BigQuery (batch processing).
+    
+    Historical Backfill Mode:
+    - Fetches orders from oldest → newest (orderby=date, order=asc)
+    - Processes 100 orders per execution
+    - Tracks progress in sync_state_woocommerce (batch_number)
+    - Refreshes products/customers every 10 batches (~10 hours)
+    
+    After initial backfill completes, switches to daily incremental syncs.
+    """
+    logger.info("Starting WooCommerce → BigQuery sync (historical backfill mode)...")
     
     # Initialize Firestore with explicit project_id
     db = firestore.Client(project=PROJECT_ID)
@@ -585,9 +601,9 @@ def sync_woocommerce():
         batch_size = 100
         page_number = current_batch_number + 1  # Page numbers start at 1
         
-        # 1. Fetch ONE batch (page) of orders
+        # 1. Fetch ONE batch (page) of orders (oldest first for historical backfill)
         logger.info(f"Fetching batch {current_batch_number} (page {page_number}, size {batch_size})...")
-        batch_orders = fetch_woo_data_batch("/orders", page=page_number, per_page=batch_size)
+        batch_orders = fetch_woo_data_batch("/orders", page=page_number, per_page=batch_size, orderby="date", order="asc")
         
         if not batch_orders:
             logger.info(f"No orders for batch {current_batch_number}, initial load complete")
@@ -613,16 +629,17 @@ def sync_woocommerce():
         update_sync_metadata("order_items", items_loaded)
         
         # 4. Fetch and update products (incremental - fetch all products weekly, not just initial)
+        # During backfill: fetch every batch to catch product changes
         products_loaded = 0
-        if current_batch_number % 7 == 0:  # Every 7 batches (~7 hours), refresh products
-            logger.info("Fetching all products for incremental update...")
-            products = fetch_woo_data_all("/products")
+        if current_batch_number % 10 == 0:  # Every 10 batches (~10 hours), refresh products
+            logger.info("Fetching all products for incremental update (most recently modified first)...")
+            products = fetch_woo_data_all("/products", orderby="modified", order="desc")
             products_loaded = load_products_to_bigquery(products)
             update_sync_metadata("products", products_loaded)
         
         # 5. Fetch and update customers (incremental - fetch all customers weekly, not just initial)
         customers_loaded = 0
-        if current_batch_number % 7 == 0:  # Every 7 batches (~7 hours), refresh customers
+        if current_batch_number % 10 == 0:  # Every 10 batches (~10 hours), refresh customers
             logger.info("Fetching all customers for incremental update...")
             customers = fetch_woo_data_all("/customers")
             customers_loaded = load_customers_to_bigquery(customers)
